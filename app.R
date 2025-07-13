@@ -8,19 +8,12 @@
 #
 
 library(shiny)
-library(leaflet)
-library(sf)
-library(dplyr)
+library(maps)
 library(readr)
-library(RColorBrewer)
-library(tigris)
+library(dplyr)
 
-# Load city shapes once
-tx_cities <- places(state = "TX", year = 2022, class = "sf")
-
-# Load and clean gas price data
+# Load gas price data
 gas_data <- read_csv("data/gas_prices_texas.csv") |>
-  #subset(Timeframe == "Current Avg.") |>
   mutate(
     Metro = toupper(Metro),
     Regular = as.numeric(gsub("[$,]", "", Regular)),
@@ -29,80 +22,45 @@ gas_data <- read_csv("data/gas_prices_texas.csv") |>
     Diesel = as.numeric(gsub("[$,]", "", Diesel))
   )
 
-# Preprocess geometry merge
-tx_map_data <- tx_cities |>
-  mutate(NAME = toupper(NAME)) |>
-  inner_join(gas_data, by = c("NAME" = "Metro"))
+# Hardcoded lat/lon for major cities (simplified)
+city_coords <- tibble::tibble(
+  Metro = c("AUSTIN", "DALLAS", "HOUSTON", "SAN ANTONIO"),
+  lat = c(30.2672, 32.7767, 29.7604, 29.4241),
+  lon = c(-97.7431, -96.7970, -95.3698, -98.4936)
+)
 
-# Start the app
 ui <- fluidPage(
   titlePanel("Texas Gas Prices by City"),
   sidebarLayout(
     sidebarPanel(
-      selectInput(
-        inputId = "fuel_type",
-        label = "Select Fuel Type",
-        choices = c("Regular", "Mid", "Premium", "Diesel"),
-        selected = "Regular"
-      ),
-      selectInput(
-        inputId = "timeframe",
-        label = "Select Timeframe",
-        choices = c("Current Avg.", "Yesterday Avg.", "Week Ago Avg.", "Month Ago Avg.", "Year Ago Avg."),
-        selected = "Current Avg."
-      )
+      selectInput("fuel_type", "Select Fuel Type",
+                  choices = c("Regular", "Mid", "Premium", "Diesel")),
+      selectInput("timeframe", "Select Timeframe",
+                  choices = c("Current Avg.", "Yesterday Avg.", "Week Ago Avg.",
+                              "Month Ago Avg.", "Year Ago Avg."),
+                  selected = "Current Avg.")
     ),
     mainPanel(
-      leafletOutput("gas_map", height = "700px")
+      plotOutput("mapPlot", height = "600px")
     )
   )
 )
 
-# Define server logic required to draw plots
 server <- function(input, output, session) {
-  # Reactive data filtered by timeframe
-  filtered_data <- reactive({
-    # Filter gas_data to selected timeframe
-    df <- gas_data %>%
-      filter(Timeframe == input$timeframe)
-    
-    # Rejoin with city geometries
-    tx_cities %>%
-      mutate(NAME = toupper(NAME)) %>%
-      inner_join(df %>% mutate(Metro = toupper(Metro)), by = c("NAME" = "Metro"))
-  })
-  
-  output$gas_map <- renderLeaflet({
+  output$mapPlot <- renderPlot({
     fuel <- input$fuel_type
-    map_data <- filtered_data()
-    palette_vals <- map_data[[fuel]]
-    pal <- colorNumeric("YlOrRd", domain = palette_vals)
+    timeframe <- input$timeframe
     
-    leaflet(map_data) %>%
-      addProviderTiles(providers$CartoDB.Positron) %>%
-      addPolygons(
-        fillColor = ~pal(map_data[[fuel]]),
-        weight = 1,
-        opacity = 1,
-        color = "white",
-        dashArray = "3",
-        fillOpacity = 0.7,
-        label = ~paste0(NAME, ": $", round(map_data[[fuel]], 3)),
-        highlightOptions = highlightOptions(
-          weight = 2,
-          color = "#666",
-          fillOpacity = 0.9,
-          bringToFront = TRUE
-        )
-      ) %>%
-      addLegend(
-        pal = pal,
-        values = palette_vals,
-        title = paste("Avg Price ($)", input$timeframe),
-        position = "bottomright"
-      )
+    df <- gas_data |>
+      filter(Timeframe == timeframe) |>
+      inner_join(city_coords, by = "Metro")
+    
+    map("state", "texas", col = "#cccccc", fill = TRUE)
+    points(df$lon, df$lat, pch = 21, bg = "red", cex = 2)
+    
+    labels <- paste0(df$Metro, ": $", round(df[[fuel]], 2))
+    text(df$lon, df$lat, labels = labels, pos = 4, cex = 0.8)
   })
 }
 
-# Run the application 
 shinyApp(ui = ui, server = server)
